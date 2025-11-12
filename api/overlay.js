@@ -17,28 +17,25 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Base image URL required" });
     }
 
-    // Fetch base image
-    const baseResp = await fetch(baseUrl);
-    console.log("Base fetch:", baseUrl, "status:", baseResp.status, baseResp.headers.get("content-type"));
+    // Fetch base image with headers to look like a browser
+    const baseResp = await fetch(baseUrl, {
+      headers: { "User-Agent": "Mozilla/5.0", "Accept": "image/*,*/*" },
+    });
+    console.log("Base fetch:", baseUrl, baseResp.status, baseResp.headers.get("content-type"));
     const baseBuf = Buffer.from(await baseResp.arrayBuffer());
 
     // Prepare overlays
     const composites = await Promise.all(
       overlays.map(async (layer) => {
-        const resp = await fetch(layer.url);
-        console.log("Overlay fetch:", layer.url, "status:", resp.status, resp.headers.get("content-type"));
-
-        if (!resp.ok) {
-          throw new Error(`Overlay fetch failed: ${resp.status}`);
-        }
+        const resp = await fetch(layer.url, {
+          headers: { "User-Agent": "Mozilla/5.0", "Accept": "image/*,*/*" },
+        });
+        console.log("Overlay fetch:", layer.url, resp.status, resp.headers.get("content-type"));
+        if (!resp.ok) throw new Error(`Overlay fetch failed: ${resp.status}`);
 
         const buf = Buffer.from(await resp.arrayBuffer());
 
-        // Convert to PNG and flatten color (fix invisible SVGs)
-        let overlay = sharp(buf)
-          .flatten({ background: { r: 255, g: 255, b: 255, alpha: 1 } }) // make opaque
-          .png();
-
+        let overlay = sharp(buf).png(); // keep transparency, don’t flatten
         if (layer.width || layer.height) {
           overlay = overlay.resize(
             layer.width ? parseInt(layer.width) : null,
@@ -47,7 +44,6 @@ export default async function handler(req, res) {
         }
 
         const overlayBuf = await overlay.toBuffer();
-
         return {
           input: overlayBuf,
           top: layer.y || 0,
@@ -62,7 +58,6 @@ export default async function handler(req, res) {
     if (composites.length) image = image.composite(composites);
 
     const outBuf = await image.toFormat(format).toBuffer();
-
     res.setHeader("Content-Type", `image/${format}`);
     res.send(outBuf);
   } catch (err) {
