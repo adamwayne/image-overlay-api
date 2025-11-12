@@ -1,8 +1,8 @@
 {
-  "name": "image-overlay-api",
+  "name": "image-compositor",
   "version": "1.0.0",
-  "type": "module",
   "dependencies": {
-    "sharp": "^0.33.0"
+    "sharp": "^0.32.0",
+    "node-fetch": "^2.6.7"
   }
 }
