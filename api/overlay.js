@@ -1,5 +1,15 @@
 import sharp from "sharp";
 
+// tiny helper: fetch through a proxy that allows image hotlinking
+async function fetchImage(url) {
+  const proxy = `https://images.weserv.nl/?url=${encodeURIComponent(url.replace(/^https?:\/\//, ""))}`;
+  const resp = await fetch(proxy, {
+    headers: { "User-Agent": "Mozilla/5.0", "Accept": "image/*,*/*" }
+  });
+  if (!resp.ok) throw new Error(`Fetch failed ${resp.status} for ${url}`);
+  return Buffer.from(await resp.arrayBuffer());
+}
+
 export default async function handler(req, res) {
   try {
     const body =
@@ -13,47 +23,30 @@ export default async function handler(req, res) {
     const overlays = body.overlays || [];
     const format = body.output || "png";
 
-    if (!baseUrl) {
-      return res.status(400).json({ error: "Base image URL required" });
-    }
+    if (!baseUrl) return res.status(400).json({ error: "Base image URL required" });
 
-    // Fetch base image with headers to look like a browser
-    const baseResp = await fetch(baseUrl, {
-      headers: { "User-Agent": "Mozilla/5.0", "Accept": "image/*,*/*" },
-    });
-    console.log("Base fetch:", baseUrl, baseResp.status, baseResp.headers.get("content-type"));
-    const baseBuf = Buffer.from(await baseResp.arrayBuffer());
+    // always fetch through proxy so iconsdb works
+    const baseBuf = await fetchImage(baseUrl);
 
-    // Prepare overlays
     const composites = await Promise.all(
       overlays.map(async (layer) => {
-        const resp = await fetch(layer.url, {
-          headers: { "User-Agent": "Mozilla/5.0", "Accept": "image/*,*/*" },
-        });
-        console.log("Overlay fetch:", layer.url, resp.status, resp.headers.get("content-type"));
-        if (!resp.ok) throw new Error(`Overlay fetch failed: ${resp.status}`);
-
-        const buf = Buffer.from(await resp.arrayBuffer());
-
-        let overlay = sharp(buf).png(); // keep transparency, don’t flatten
+        const overlayBuf = await fetchImage(layer.url);
+        let overlay = sharp(overlayBuf).png();
         if (layer.width || layer.height) {
           overlay = overlay.resize(
             layer.width ? parseInt(layer.width) : null,
             layer.height ? parseInt(layer.height) : null
           );
         }
-
-        const overlayBuf = await overlay.toBuffer();
         return {
-          input: overlayBuf,
+          input: await overlay.toBuffer(),
           top: layer.y || 0,
           left: layer.x || 0,
-          opacity: layer.opacity ?? 1,
+          opacity: layer.opacity ?? 1
         };
       })
     );
 
-    // Composite overlays
     let image = sharp(baseBuf);
     if (composites.length) image = image.composite(composites);
 
