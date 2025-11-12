@@ -27,9 +27,8 @@ module.exports = async (req, res) => {
       const designBuffer = await designResp.buffer();
       
       outputBuffer = await sharp(designBuffer)
-        .resize(dims.width, dims.height, { fit: 'inside', withoutEnlargement: false })
-        .png({ compressionLevel: 0 })
-        .withMetadata({ density: 300 })
+        .resize(dims.width, dims.height, { fit: 'inside' })
+        .png()
         .toBuffer();
     }
     // DISPLAY FILE - composite design onto blank
