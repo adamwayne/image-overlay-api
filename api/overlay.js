@@ -19,17 +19,24 @@ export default async function handler(req, res) {
 
     // Fetch base image
     const baseResp = await fetch(baseUrl);
+    console.log("Base fetch:", baseUrl, "status:", baseResp.status, baseResp.headers.get("content-type"));
     const baseBuf = Buffer.from(await baseResp.arrayBuffer());
 
     // Prepare overlays
     const composites = await Promise.all(
       overlays.map(async (layer) => {
         const resp = await fetch(layer.url);
+        console.log("Overlay fetch:", layer.url, "status:", resp.status, resp.headers.get("content-type"));
+
+        if (!resp.ok) {
+          throw new Error(`Overlay fetch failed: ${resp.status}`);
+        }
+
         const buf = Buffer.from(await resp.arrayBuffer());
 
         // Convert to PNG and flatten color (fix invisible SVGs)
         let overlay = sharp(buf)
-          .flatten({ background: { r: 255, g: 255, b: 255, alpha: 1 } }) // force opaque background
+          .flatten({ background: { r: 255, g: 255, b: 255, alpha: 1 } }) // make opaque
           .png();
 
         if (layer.width || layer.height) {
@@ -55,10 +62,11 @@ export default async function handler(req, res) {
     if (composites.length) image = image.composite(composites);
 
     const outBuf = await image.toFormat(format).toBuffer();
+
     res.setHeader("Content-Type", `image/${format}`);
     res.send(outBuf);
   } catch (err) {
-    console.error(err);
+    console.error("❌ Overlay error:", err);
     res.status(500).json({ error: err.message });
   }
 }
