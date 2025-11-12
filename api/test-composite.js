@@ -26,7 +26,7 @@ module.exports = async (req, res) => {
     const resizedMeta = await sharp(resizedDesign).metadata();
     
     const xPct = 50;
-    const yPct = 28;
+    const yPct = 32;
     
     const left = Math.round((bgMetadata.width * (xPct / 100)) - (resizedMeta.width / 2));
     const top = Math.round(bgMetadata.height * (yPct / 100));
