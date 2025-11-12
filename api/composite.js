@@ -41,9 +41,18 @@ module.exports = async (req, res) => {
       const backgroundBuffer = await backgroundResp.buffer();
       const designBuffer = await designResp.buffer();
       
+      const bgMetadata = await sharp(backgroundBuffer).metadata();
+      
+      // Default: center design at 50% of background width
+      const designWidth = Math.round(bgMetadata.width * 0.5);
+      
+      const resizedDesign = await sharp(designBuffer)
+        .resize(designWidth, null, { fit: 'inside' })
+        .toBuffer();
+      
       outputBuffer = await sharp(backgroundBuffer)
         .composite([{
-          input: designBuffer,
+          input: resizedDesign,
           gravity: 'center'
         }])
         .png()
