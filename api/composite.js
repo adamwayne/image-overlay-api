@@ -1,8 +1,5 @@
 import Jimp from "jimp";
 import fetch from "node-fetch";
-import fs from "fs";
-import path from "path";
-import { v4 as uuidv4 } from "uuid";
 
 export default async function handler(req, res) {
   try {
@@ -48,14 +45,12 @@ export default async function handler(req, res) {
 
     background.composite(design, px, py);
 
-    // Save to /tmp
-    const id = uuidv4();
-    const filePath = `/tmp/${id}.png`;
-    await background.writeAsync(filePath);
+    // Get image as buffer and convert to base64
+    const imageBuffer = await background.getBufferAsync(Jimp.MIME_PNG);
+    const base64Image = imageBuffer.toString('base64');
+    const dataUrl = `data:image/png;base64,${base64Image}`;
 
-    // Return a URL to fetch-image
-    const finalUrl = `https://${req.headers.host}/api/fetch-image?id=${id}`;
-    return res.status(200).json({ success: true, image_url: finalUrl });
+    return res.status(200).json({ success: true, image_url: dataUrl });
 
   } catch (err) {
     console.error("COMPOSITE ERROR:", err);
