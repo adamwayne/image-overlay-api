@@ -1,49 +1,77 @@
-import Jimp from "jimp";
-import path from "path";
-import { v4 as uuidv4 } from "uuid";
-import { fetchDropboxImage } from "./utils/dropboxFetch.js";
+import sharp from "sharp";
+import fetchImage from "../utils/fetch-image";
 
 export default async function handler(req, res) {
   try {
     if (req.method !== "POST") {
-      return res.status(405).json({ error: "Method not allowed" });
+      return res.status(405).json({ error: "POST only" });
     }
 
-    const { design_url, background_url } = req.body;
+    const {
+      design_url,
+      background_url,
+      width_percent = 50,
+      x_percent = 50,
+      y_percent = 50,
+      type = "display"
+    } = req.body || {};
+
+    console.log("📦 Incoming body:", req.body);
 
     if (!design_url || !background_url) {
-      return res.status(400).json({ error: "Missing design_url or background_url" });
+      return res.status(400).json({
+        error: "Missing required fields: design_url, background_url"
+      });
     }
 
-    console.log("🎨 Fetching design...");
-    const designBuf = await fetchDropboxImage(design_url);
+    // Load background
+    const bgBuffer = await fetchImage(background_url);
+    const bg = sharp(bgBuffer);
+    const bgMeta = await bg.metadata();
 
-    console.log("🖼 Fetching background...");
-    const bgBuf = await fetchDropboxImage(background_url);
+    // Compute placement
+    const designTargetWidth = Math.round(
+      (bgMeta.width * Number(width_percent)) / 100
+    );
 
-    const design = await Jimp.read(designBuf);
-    const background = await Jimp.read(bgBuf);
+    if (!designTargetWidth || isNaN(designTargetWidth)) {
+      return res.status(400).json({
+        error: `Invalid width_percent: ${width_percent}`
+      });
+    }
 
-    // Resize design to reasonable size
-    const targetWidth = background.bitmap.width * 0.35; // tweakable %
-    design.resize(targetWidth, Jimp.AUTO);
+    // Load + resize design
+    const designBuffer = await fetchImage(design_url);
+    const resizedDesign = await sharp(designBuffer)
+      .resize({ width: designTargetWidth })
+      .toBuffer();
 
-    const x = background.bitmap.width / 2 - design.bitmap.width / 2;
-    const y = background.bitmap.height / 2 - design.bitmap.height / 2;
+    // Compute X/Y
+    const x = Math.round((bgMeta.width * Number(x_percent)) / 100);
+    const y = Math.round((bgMeta.height * Number(y_percent)) / 100);
 
-    background.composite(design, x, y);
+    if ([x, y].some((v) => isNaN(v))) {
+      return res.status(400).json({
+        error: `Invalid x_percent or y_percent: ${x_percent}, ${y_percent}`
+      });
+    }
 
-    const id = uuidv4();
-    const filePath = path.join("/tmp", `${id}.png`);
-    await background.writeAsync(filePath);
+    // Composite
+    const finalImage = await bg
+      .composite([{ input: resizedDesign, left: x, top: y }])
+      .png()
+      .toBuffer();
 
-    const absolute = `https://${req.headers.host}/api/fetch-image?id=${id}`;
-    console.log("🚀 Returning:", absolute);
+    const base64 = finalImage.toString("base64");
 
-    return res.status(200).json({ success: true, image_url: absolute });
-
+    return res.status(200).json({
+      success: true,
+      image_url: `data:image/png;base64,${base64}`
+    });
   } catch (err) {
     console.error("❌ Composite Error:", err);
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({
+      error: err.message || "Unknown composite error"
+    });
   }
 }
