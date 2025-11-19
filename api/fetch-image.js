@@ -1,22 +1,33 @@
-import fs from "fs";
-import path from "path";
+import fetch from "node-fetch";
 
-export default async function handler(req, res) {
-  try {
-    const id = req.query.id;
-    if (!id) return res.status(400).send("Missing id");
+export default async function fetchImage(url) {
+  if (!url) throw new Error("Missing image URL");
 
-    const filePath = path.join("/tmp", `${id}.png`);
+  const cleanUrl = sanitizeDropbox(url);
 
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).send("File not found");
-    }
+  const response = await fetch(cleanUrl);
 
-    const img = fs.readFileSync(filePath);
-    res.setHeader("Content-Type", "image/png");
-    res.send(img);
-  } catch (err) {
-    console.error("Fetch-error:", err);
-    res.status(500).send("Server error");
+  const contentType = response.headers.get("content-type");
+
+  // Detect HTML (Dropbox errors return HTML)
+  if (contentType && contentType.includes("text/html")) {
+    const html = await response.text();
+    throw new Error("Dropbox returned HTML instead of image. URL: " + cleanUrl);
   }
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch image: ${response.status} ${response.statusText}`);
+  }
+
+  return Buffer.from(await response.arrayBuffer());
+}
+
+// Always enforce raw=1 and dl=1
+function sanitizeDropbox(url) {
+  return url
+    .replace("www.dropbox.com", "dl.dropboxusercontent.com")
+    .replace("?dl=0", "")
+    .replace("?raw=1", "")
+    .replace("&raw=1", "")
+    + (url.includes("?") ? "&raw=1" : "?raw=1");
 }
