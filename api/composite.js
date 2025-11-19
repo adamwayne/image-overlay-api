@@ -1,8 +1,6 @@
 import Jimp from "jimp";
 import fetch from "node-fetch";
-import fs from "fs";
-import path from "path";
-import { v4 as uuidv4 } from "uuid";
+import { put } from "@vercel/blob";
 
 export default async function handler(req, res) {
   try {
@@ -48,14 +46,17 @@ export default async function handler(req, res) {
 
     background.composite(design, px, py);
 
-    // Save to /tmp
-    const id = uuidv4();
-    const filePath = `/tmp/${id}.png`;
-    await background.writeAsync(filePath);
+    // Get image as buffer
+    const imageBuffer = await background.getBufferAsync(Jimp.MIME_PNG);
 
-    // Return a URL to fetch-image
-    const finalUrl = `https://${req.headers.host}/api/fetch-image?id=${id}`;
-    return res.status(200).json({ success: true, image_url: finalUrl });
+    // Upload to Vercel Blob storage
+    const filename = `composite-${Date.now()}.png`;
+    const blob = await put(filename, imageBuffer, {
+      access: 'public',
+      contentType: 'image/png'
+    });
+
+    return res.status(200).json({ success: true, image_url: blob.url });
 
   } catch (err) {
     console.error("COMPOSITE ERROR:", err);
