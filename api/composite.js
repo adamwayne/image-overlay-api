@@ -1,174 +1,105 @@
-import sharp from "sharp";
-import { v2 as cloudinary } from 'cloudinary';
-
-// --- Configure Cloudinary ---
-// Make sure these variables are set in your Vercel Project Settings
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-});
-
-export const config = {
-  api: {
-    bodyParser: false, // disable Vercel's auto-parser
-  },
-};
+import Jimp from 'jimp';
+import fetch from 'node-fetch';
+import fs from 'fs';
+import path from 'path';
+import { v4 as uuidv4 } from 'uuid';
 
 export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const { 
+    type, 
+    design_url, 
+    background_url, 
+    width_percent, 
+    x_percent, 
+    y_percent,
+    canvas_width,
+    canvas_height,
+    webhook_url,
+    metadata
+  } = req.body;
+
   try {
-    // --- Parse raw body manually (fixes req.body undefined) ---
-    const chunks = [];
-    for await (const chunk of req) chunks.push(chunk);
-    const rawBody = Buffer.concat(chunks).toString();
-    const body = JSON.parse(rawBody || "{}");
+    let finalImage;
 
-    const {
-      type,
-      design_url,
-      background_url,
-      width_percent,
-      x_percent,
-      y_percent,
-      canvas_width,
-      canvas_height,
-      safe_width,
-      safe_height,
-      full_bleed,
-      placements,
-      webhook_url,
-      metadata,
-    } = body;
-
-    // --- Fetch design image ---
-    const designResp = await fetch(design_url);
-    const designBuffer = Buffer.from(await designResp.arrayBuffer());
-
-    let outputBuffer;
-
-    // --- PRINT MODE ---
-    if (type === "print") {
-      if (placements && placements.length > 0) {
-        // Multi-placement (e.g., mug wrap)
-        const canvas = sharp({
-          create: {
-            width: canvas_width,
-            height: canvas_height,
-            channels: 4,
-            background: { r: 0, g: 0, b: 0, alpha: 0 },
-          },
-        });
-
-        const composites = [];
-        for (const placement of placements) {
-          const resized = await sharp(designBuffer)
-            .resize(placement.max_width, placement.max_height, { fit: "inside" })
-            .toBuffer();
-
-          const meta = await sharp(resized).metadata();
-          const left = Math.round(
-            canvas_width * (placement.x_percent / 100) - meta.width / 2
-          );
-          const top = Math.round(
-            canvas_height * (placement.y_percent / 100) - meta.height / 2
-          );
-
-          composites.push({ input: resized, left, top });
-        }
-
-        outputBuffer = await canvas.composite(composites).png().toBuffer();
+    if (type === 'print') {
+      // Print file logic (existing)
+      const design = await Jimp.read(design_url);
+      const targetWidth = canvas_width || 4200;
+      const targetHeight = canvas_height || 4800;
+      
+      const canvas = new Jimp(targetWidth, targetHeight, 0x00000000);
+      
+      const designAspect = design.bitmap.width / design.bitmap.height;
+      const canvasAspect = targetWidth / targetHeight;
+      
+      let scaledWidth, scaledHeight;
+      if (designAspect > canvasAspect) {
+        scaledWidth = targetWidth;
+        scaledHeight = Math.round(targetWidth / designAspect);
       } else {
-        // Single placement
-        let maxWidth, maxHeight;
-
-        if (full_bleed) {
-          maxWidth = canvas_width;
-          maxHeight = canvas_height;
-        } else {
-          maxWidth = safe_width || Math.floor(canvas_width * 0.9);
-          maxHeight = safe_height || Math.floor(canvas_height * 0.9);
-        }
-
-        const resizedDesign = await sharp(designBuffer)
-          .resize(maxWidth, maxHeight, { fit: full_bleed ? "cover" : "inside" })
-          .toBuffer();
-
-        const resizedMeta = await sharp(resizedDesign).metadata();
-        const left = Math.floor((canvas_width - resizedMeta.width) / 2);
-        const top = Math.floor((canvas_height - resizedMeta.height) / 2);
-
-        outputBuffer = await sharp({
-          create: {
-            width: canvas_width,
-            height: canvas_height,
-            channels: 4,
-            background: { r: 0, g: 0, b: 0, alpha: 0 },
-          },
-        })
-          .composite([{ input: resizedDesign, left, top }])
-          .png()
-          .toBuffer();
+        scaledHeight = targetHeight;
+        scaledWidth = Math.round(targetHeight * designAspect);
       }
-
-      // --- DISPLAY MODE ---
+      
+      design.resize(scaledWidth, scaledHeight);
+      
+      const x = Math.round((targetWidth - scaledWidth) / 2);
+      const y = Math.round((targetHeight - scaledHeight) / 2);
+      
+      canvas.composite(design, x, y);
+      finalImage = canvas;
+      
     } else {
-      const backgroundResp = await fetch(background_url);
-      const backgroundBuffer = Buffer.from(await backgroundResp.arrayBuffer());
-      const bgMetadata = await sharp(backgroundBuffer).metadata();
+      // Display logic (existing)
+      const [background, design] = await Promise.all([
+        Jimp.read(background_url),
+        Jimp.read(design_url)
+      ]);
 
-      const designWidth = Math.round(bgMetadata.width * (width_percent / 100));
+      const targetWidth = Math.round((background.bitmap.width * width_percent) / 100);
+      design.resize(targetWidth, Jimp.AUTO);
 
-      const resizedDesign = await sharp(designBuffer)
-        .resize(designWidth, null, { fit: "inside" })
-        .toBuffer();
+      const x = Math.round((background.bitmap.width * x_percent) / 100 - design.bitmap.width / 2);
+      const y = Math.round((background.bitmap.height * y_percent) / 100 - design.bitmap.height / 2);
 
-      const resizedMeta = await sharp(resizedDesign).metadata();
-      const left = Math.round(
-        bgMetadata.width * (x_percent / 100) - resizedMeta.width / 2
-      );
-      const top = Math.round(bgMetadata.height * (y_percent / 100));
-
-      outputBuffer = await sharp(backgroundBuffer)
-        .composite([{ input: resizedDesign, left, top }])
-        .png()
-        .toBuffer();
+      background.composite(design, x, y);
+      finalImage = background;
     }
 
-    // --- ☁️ UPLOAD TO CLOUDINARY (Replaces Base64 Logic) ---
-    const uploadResult = await new Promise((resolve, reject) => {
-      const uploadStream = cloudinary.uploader.upload_stream(
-        {
-          folder: "airtable_renders", // Folder name in your Cloudinary dashboard
-          resource_type: "image",
-        },
-        (error, result) => {
-          if (error) reject(error);
-          else resolve(result);
-        }
-      );
-      
-      // Write the buffer (image data) to the upload stream
-      uploadStream.end(outputBuffer);
-    });
+    // Generate unique ID
+    const imageId = uuidv4();
+    
+    // Store in /tmp (Vercel's temporary storage)
+    const tmpPath = path.join('/tmp', `${imageId}.png`);
+    await finalImage.writeAsync(tmpPath);
 
-    // This is the magic link that Airtable needs
-    const publicImageUrl = uploadResult.secure_url;
+    // Return URL instead of base64
+    const imageUrl = `https://${req.headers.host}/api/fetch-image?id=${imageId}`;
 
-    // --- Optional webhook callback ---
     if (webhook_url) {
       await fetch(webhook_url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          image_url: publicImageUrl, // Sending URL instead of Base64
-          metadata: metadata,
-        }),
+          image_url: imageUrl,
+          metadata: metadata
+        })
+      });
+
+      return res.status(200).json({ 
+        message: 'Webhook sent',
+        image_url: imageUrl
       });
     }
 
-    res.status(200).json({ success: true, image_url: publicImageUrl });
+    return res.status(200).json({ image_url: imageUrl });
+
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: error.message });
+    console.error('Error:', error);
+    return res.status(500).json({ error: error.message });
   }
 }
