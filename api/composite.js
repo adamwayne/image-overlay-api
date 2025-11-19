@@ -1,61 +1,68 @@
-import sharp from "sharp";
-import { loadImageBuffer } from "./fetch-image.js";
+import Jimp from "jimp";
+import { v4 as uuidv4 } from "uuid";
+import fs from "fs";
+import path from "path";
+import { loadImageBuffer } from "./fetch-image.js"; // <-- matches final loader
 
 export default async function handler(req, res) {
-    try {
-        const { design_url, background_url } = req.body || {};
-
-        if (!design_url || !background_url) {
-            return res.status(400).json({ error: "Missing URLs" });
-        }
-
-        // Load both images as buffers
-        const bgBuffer = await loadImageBuffer(background_url);
-        const designBuffer = await loadImageBuffer(design_url);
-
-        // Get background dimensions safely
-        const bgMeta = await sharp(bgBuffer).metadata();
-
-        if (!bgMeta.width || !bgMeta.height) {
-            return res.status(400).json({
-                error: "Background image has no valid dimensions"
-            });
-        }
-
-        const BG_WIDTH = bgMeta.width;
-        const BG_HEIGHT = bgMeta.height;
-
-        // Resize design proportionally to a known max width
-        const DESIGN_MAX_WIDTH = Math.floor(BG_WIDTH * 0.6);
-
-        const resizedDesign = await sharp(designBuffer)
-            .resize({
-                width: DESIGN_MAX_WIDTH,
-                withoutEnlargement: true
-            })
-            .toBuffer();
-
-        // Composite design on top of background
-        const output = await sharp(bgBuffer)
-            .composite([
-                {
-                    input: resizedDesign,
-                    gravity: "center"
-                }
-            ])
-            .png()
-            .toBuffer();
-
-        // Return base64 safely
-        const b64 = `data:image/png;base64,${output.toString("base64")}`;
-
-        return res.status(200).json({
-            success: true,
-            image_url: b64
-        });
-
-    } catch (err) {
-        console.error("❌ Composite error:", err);
-        return res.status(500).json({ error: err.message });
+  try {
+    if (req.method !== "POST") {
+      return res.status(405).json({ error: "Method not allowed" });
     }
+
+    const {
+      design_url,
+      background_url,
+      width_percent = 35,
+      x_percent = 50,
+      y_percent = 40
+    } = req.body;
+
+    if (!design_url) return res.status(400).json({ error: "Missing design_url" });
+    if (!background_url) return res.status(400).json({ error: "Missing background_url" });
+
+    console.log("🎨 DESIGN:", design_url);
+    console.log("🖼 BACKGROUND:", background_url);
+
+    // 🔥 Load both images as buffers
+    const [designBuffer, backgroundBuffer] = await Promise.all([
+      loadImageBuffer(design_url),
+      loadImageBuffer(background_url)
+    ]);
+
+    // 🔥 Decode into Jimp images
+    const design = await Jimp.read(designBuffer);
+    const background = await Jimp.read(backgroundBuffer);
+
+    // 🔥 Resize design proportionally
+    const targetWidth = Math.round(background.bitmap.width * (width_percent / 100));
+    design.resize(targetWidth, Jimp.AUTO);
+
+    // 🔥 Position
+    const x = Math.round((background.bitmap.width * (x_percent / 100)) - (design.bitmap.width / 2));
+    const y = Math.round((background.bitmap.height * (y_percent / 100)) - (design.bitmap.height / 2));
+
+    // 🔥 Composite
+    background.composite(design, x, y);
+
+    // 🔥 Save to tmp
+    const id = uuidv4();
+    const tmpPath = path.join("/tmp", `${id}.png`);
+    await background.writeAsync(tmpPath);
+
+    // 🔥 Public URL (points to fetch-image.js)
+    const host = req.headers.host;
+    const finalUrl = `https://${host}/api/fetch-image?id=${id}`;
+
+    console.log("🔥 FINAL URL:", finalUrl);
+
+    return res.status(200).json({
+      success: true,
+      image_url: finalUrl
+    });
+
+  } catch (err) {
+    console.error("❌ Composite Error:", err);
+    return res.status(500).json({ error: err.message });
+  }
 }
