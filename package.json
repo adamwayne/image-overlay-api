@@ -1,9 +1,6 @@
 {
   "name": "airtable-renderer",
   "version": "1.0.0",
-  "scripts": {
-    "build": "echo 'No build step necessary'"
-  },
   "dependencies": {
     "sharp": "^0.32.6",
     "cloudinary": "^2.5.1" 
