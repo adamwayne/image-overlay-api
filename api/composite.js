@@ -1,4 +1,13 @@
 import sharp from "sharp";
+import { v2 as cloudinary } from 'cloudinary';
+
+// --- Configure Cloudinary ---
+// Make sure these variables are set in your Vercel Project Settings
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
 
 export const config = {
   api: {
@@ -125,10 +134,25 @@ export default async function handler(req, res) {
         .toBuffer();
     }
 
-    // --- Convert to base64 image URL ---
-    const base64Image = `data:image/png;base64,${outputBuffer.toString(
-      "base64"
-    )}`;
+    // --- ☁️ UPLOAD TO CLOUDINARY (Replaces Base64 Logic) ---
+    const uploadResult = await new Promise((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          folder: "airtable_renders", // Folder name in your Cloudinary dashboard
+          resource_type: "image",
+        },
+        (error, result) => {
+          if (error) reject(error);
+          else resolve(result);
+        }
+      );
+      
+      // Write the buffer (image data) to the upload stream
+      uploadStream.end(outputBuffer);
+    });
+
+    // This is the magic link that Airtable needs
+    const publicImageUrl = uploadResult.secure_url;
 
     // --- Optional webhook callback ---
     if (webhook_url) {
@@ -136,14 +160,15 @@ export default async function handler(req, res) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          image_url: base64Image,
+          image_url: publicImageUrl, // Sending URL instead of Base64
           metadata: metadata,
         }),
       });
     }
 
-    res.status(200).json({ success: true, image_url: base64Image });
+    res.status(200).json({ success: true, image_url: publicImageUrl });
   } catch (error) {
+    console.error(error);
     res.status(500).json({ error: error.message });
   }
 }
