@@ -35,4 +35,4 @@ Retrieves a previously generated composite image.
 
 This API is deployed on Vercel and automatically deploys from the `main` branch.
 
-Latest update: 2025-11-19
+Latest update: 2025-11-19 (print file generator added)
