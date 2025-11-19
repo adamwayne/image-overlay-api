@@ -1,21 +1,22 @@
-import fs from 'fs';
-import path from 'path';
+import fs from "fs";
+import path from "path";
 
 export default async function handler(req, res) {
-  const { id } = req.query;
+  try {
+    const id = req.query.id;
+    if (!id) return res.status(400).send("Missing id");
 
-  if (!id) {
-    return res.status(400).json({ error: 'Missing id' });
+    const filePath = path.join("/tmp", `${id}.png`);
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).send("File not found");
+    }
+
+    const img = fs.readFileSync(filePath);
+    res.setHeader("Content-Type", "image/png");
+    res.send(img);
+  } catch (err) {
+    console.error("Fetch-error:", err);
+    res.status(500).send("Server error");
   }
-
-  const filePath = path.join('/tmp', `${id}.png`);
-
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ error: 'Image not found' });
-  }
-
-  const buf = fs.readFileSync(filePath);
-
-  res.setHeader('Content-Type', 'image/png');
-  res.send(buf);
 }
