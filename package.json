@@ -1,8 +1,9 @@
 {
-  "name": "airtable-renderer",
+  "name": "image-overlay-api",
   "version": "1.0.0",
   "dependencies": {
-    "sharp": "^0.32.6",
-    "cloudinary": "^2.5.1" 
+    "jimp": "^0.22.10",
+    "node-fetch": "^2.7.0",
+    "uuid": "^9.0.0"
   }
 }
