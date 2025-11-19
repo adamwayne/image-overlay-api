@@ -4,143 +4,152 @@ import fs from "fs";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
 
+/**
+ * Bulletproof Dropbox URL sanitizer
+ * - Forces dl.dropboxusercontent.com
+ * - Removes all params
+ * - Enforces ?dl=1
+ */
+function sanitizeDropboxUrl(url) {
+  if (!url) return url;
+  url = url.trim();
+
+  url = url
+    .replace("www.dropbox.com", "dl.dropboxusercontent.com")
+    .replace("dropbox.com", "dl.dropboxusercontent.com");
+
+  const clean = url.split("?")[0];
+  return clean + "?dl=1";
+}
+
+/**
+ * Safe image loader
+ * - Downloads the file manually
+ * - Detects Dropbox HTML pages
+ * - Saves locally then loads via Jimp
+ */
+async function loadImage(url, label = "file") {
+  const safeUrl = sanitizeDropboxUrl(url);
+
+  const resp = await fetch(safeUrl);
+
+  const contentType = resp.headers.get("content-type") || "";
+  const buf = await resp.buffer();
+
+  if (contentType.includes("html")) {
+    throw new Error(`❌ Dropbox returned HTML instead of image for ${label}.
+URL: ${safeUrl}`);
+  }
+
+  const tmpPath = `/tmp/${label}-${uuidv4()}.png`;
+  fs.writeFileSync(tmpPath, buf);
+
+  return await Jimp.read(tmpPath);
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const {
-    type,
-    design_url,
-    background_url,
-    width_percent,
-    x_percent,
-    y_percent,
-    canvas_width,
-    canvas_height,
-    webhook_url,
-    metadata,
-  } = req.body;
-
   try {
-    // ---------- 1) Validate URLs ----------
+    const {
+      type = "display",
+      design_url,
+      background_url,
+      width_percent = 50,
+      x_percent = 50,
+      y_percent = 50,
+      webhook_url,
+      metadata
+    } = req.body;
+
     if (!design_url) {
       return res.status(400).json({ error: "Missing design_url" });
     }
-    if (type !== "print" && !background_url) {
-      return res.status(400).json({ error: "Missing background_url" });
-    }
 
-    // ---------- 2) Bulletproof Dropbox/S3/URL Loader ----------
-    async function loadImage(url, label = "image") {
-      const resp = await fetch(url);
-
-      const contentType = resp.headers.get("content-type") || "";
-      const textSample = await resp.clone().text(); // peek at body text
-
-      // Detect HTML pages (Dropbox redirect, 404 pages, etc)
-      if (
-        contentType.includes("text/html") ||
-        textSample.startsWith("<!DOCTYPE html") ||
-        textSample.startsWith("<html")
-      ) {
-        throw new Error(
-          `The URL for ${label} returned HTML instead of an image. This usually means the Dropbox link is not a direct download.`
-        );
-      }
-
-      const buffer = Buffer.from(await resp.arrayBuffer());
-
-      try {
-        return await Jimp.read(buffer);
-      } catch (err) {
-        throw new Error(
-          `Failed to decode ${label} as an image. (Likely not a PNG/JPEG or Dropbox gave a corrupted response.)`
-        );
-      }
-    }
-
-    // ---------- 3) Load Design + Background ----------
-    let design = await loadImage(design_url, "design");
+    // Sanitize & load design
+    const design = await loadImage(design_url, "design");
 
     let background = null;
     if (type !== "print") {
+      if (!background_url) {
+        return res.status(400).json({ error: "Missing background_url" });
+      }
       background = await loadImage(background_url, "background");
     }
 
-    let finalImage;
+    let finalImage = null;
 
-    // ---------- 4) PRINT MODE ----------
     if (type === "print") {
-      const targetWidth = canvas_width || 4200;
-      const targetHeight = canvas_height || 4800;
-      const canvas = new Jimp(targetWidth, targetHeight, 0x00000000);
+      // Print mode: 4200 × 4800
+      const canvas = new Jimp(4200, 4800, 0x00000000);
 
-      const designAspect = design.bitmap.width / design.bitmap.height;
-      const canvasAspect = targetWidth / targetHeight;
+      const dx = design.bitmap.width;
+      const dy = design.bitmap.height;
+      const targetAspect = 4200 / 4800;
+      const designAspect = dx / dy;
 
-      let scaledWidth, scaledHeight;
-
-      if (designAspect > canvasAspect) {
-        scaledWidth = targetWidth;
-        scaledHeight = Math.round(targetWidth / designAspect);
+      let newW, newH;
+      if (designAspect > targetAspect) {
+        newW = 4200;
+        newH = Math.round(newW / designAspect);
       } else {
-        scaledHeight = targetHeight;
-        scaledWidth = Math.round(targetHeight * designAspect);
+        newH = 4800;
+        newW = Math.round(newH * designAspect);
       }
 
-      design.resize(scaledWidth, scaledHeight);
+      design.resize(newW, newH);
 
-      const x = Math.round((targetWidth - scaledWidth) / 2);
-      const y = Math.round((targetHeight - scaledHeight) / 2);
+      const cx = Math.round((4200 - newW) / 2);
+      const cy = Math.round((4800 - newH) / 2);
 
-      canvas.composite(design, x, y);
+      canvas.composite(design, cx, cy);
       finalImage = canvas;
-
     } else {
-      // ---------- 5) DISPLAY MODE ----------
+      // Display mode
       const targetWidth = Math.round(
         (background.bitmap.width * width_percent) / 100
       );
 
       design.resize(targetWidth, Jimp.AUTO);
 
-      const x = Math.round(
-        (background.bitmap.width * x_percent) / 100 - design.bitmap.width / 2
+      const posX = Math.round(
+        background.bitmap.width * (x_percent / 100) - design.bitmap.width / 2
       );
-      const y = Math.round(
-        (background.bitmap.height * y_percent) / 100 -
-          design.bitmap.height / 2
+      const posY = Math.round(
+        background.bitmap.height * (y_percent / 100) - design.bitmap.height / 2
       );
 
-      background.composite(design, x, y);
+      background.composite(design, posX, posY);
       finalImage = background;
     }
 
-    // ---------- 6) Write to /tmp ----------
+    // Write output file
     const id = uuidv4();
-    const filePath = path.join("/tmp", `${id}.png`);
-    await finalImage.writeAsync(filePath);
+    const outPath = `/tmp/${id}.png`;
+    await finalImage.writeAsync(outPath);
 
-    const imageUrl = `https://${req.headers.host}/api/fetch-image?id=${id}`;
+    const finalUrl = `https://${req.headers.host}/api/fetch-image?id=${id}`;
 
-    // ---------- 7) Optional Webhook ----------
+    // Optional webhook callback
     if (webhook_url) {
       await fetch(webhook_url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image_url: imageUrl, metadata }),
+        body: JSON.stringify({
+          image_url: finalUrl,
+          metadata
+        })
       });
     }
 
     return res.status(200).json({
       success: true,
-      image_url: imageUrl,
+      image_url: finalUrl
     });
   } catch (err) {
-    console.error("❌ Composite Error:", err.message);
-    return res.status(500).json({
-      error: err.message,
-    });
+    console.error("❌ composite.js error:", err);
+    return res.status(500).json({ error: err.message });
   }
 }
