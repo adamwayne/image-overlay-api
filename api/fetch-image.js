@@ -1,31 +1,38 @@
 import fetch from "node-fetch";
 
-export default async function fetchImage(url) {
+/**
+ * Fetch an image buffer from Dropbox (or any URL) without breaking query params.
+ */
+export async function loadImageBuffer(url) {
   if (!url) throw new Error("Missing URL");
 
-  const clean = sanitize(url);
-  const res = await fetch(clean);
+  const clean = convertDropboxHost(url);
 
-  const type = res.headers.get("content-type");
-  if (type && type.includes("text/html")) {
-    throw new Error("Dropbox returned HTML instead of image: " + clean);
+  const res = await fetch(clean, {
+    redirect: "follow",
+    headers: {
+      "User-Agent": "Mozilla/5.0"
+    }
+  });
+
+  const contentType = res.headers.get("content-type") || "";
+
+  if (contentType.includes("text/html")) {
+    throw new Error("Dropbox returned HTML instead of an image. URL: " + clean);
   }
 
   if (!res.ok) {
-    throw new Error(`Failed to fetch: ${res.status} ${res.statusText}`);
+    throw new Error(`Failed to fetch image: ${res.status} ${res.statusText}`);
   }
 
-  return Buffer.from(await res.arrayBuffer());
+  const arrayBuffer = await res.arrayBuffer();
+  return Buffer.from(arrayBuffer);
 }
 
-function sanitize(url) {
-  let u = url.replace("www.dropbox.com", "dl.dropboxusercontent.com");
-
-  // Remove any ?dl=0, ?dl=1, &dl=1, etc
-  u = u.replace(/(\?dl=\d)/, "");
-  u = u.replace(/(\?raw=\d)/, "");
-  u = u.replace(/(&raw=\d)/, "");
-
-  // Ensure raw=1
-  return u + (u.includes("?") ? "&raw=1" : "?raw=1");
+/**
+ * Only replaces www.dropbox.com → dl.dropboxusercontent.com
+ * Leaves ALL query parameters untouched.
+ */
+function convertDropboxHost(url) {
+  return url.replace("www.dropbox.com", "dl.dropboxusercontent.com");
 }
