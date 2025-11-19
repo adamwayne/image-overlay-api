@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 
-export default async function handler(req, res) {
+export default function handler(req, res) {
   const { id } = req.query;
 
   if (!id) {
@@ -14,15 +14,10 @@ export default async function handler(req, res) {
     return res.status(404).send("Image not found");
   }
 
-  try {
-    const buffer = fs.readFileSync(filePath);
+  const fileStream = fs.createReadStream(filePath);
 
-    res.setHeader("Content-Type", "image/png");
-    res.setHeader("Content-Length", buffer.length);
+  res.setHeader("Content-Type", "image/png");
+  res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
 
-    return res.status(200).send(buffer);
-  } catch (err) {
-    console.error("❌ fetch-image error:", err);
-    return res.status(500).send("Server error");
-  }
+  fileStream.pipe(res);
 }
