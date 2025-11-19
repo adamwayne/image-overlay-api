@@ -1,38 +1,23 @@
-import fetch from "node-fetch";
+import fs from "fs";
+import path from "path";
 
-/**
- * Fetch an image buffer from Dropbox (or any URL) without breaking query params.
- */
-export async function loadImageBuffer(url) {
-  if (!url) throw new Error("Missing URL");
+export default async function handler(req, res) {
+  try {
+    const id = req.query.id;
+    if (!id) return res.status(400).send("Missing id");
 
-  const clean = convertDropboxHost(url);
+    const filePath = path.join("/tmp", `${id}.png`);
 
-  const res = await fetch(clean, {
-    redirect: "follow",
-    headers: {
-      "User-Agent": "Mozilla/5.0"
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).send("Not found");
     }
-  });
 
-  const contentType = res.headers.get("content-type") || "";
+    const data = fs.readFileSync(filePath);
+    res.setHeader("Content-Type", "image/png");
+    res.send(data);
 
-  if (contentType.includes("text/html")) {
-    throw new Error("Dropbox returned HTML instead of an image. URL: " + clean);
+  } catch (err) {
+    console.error("FETCH ERROR:", err);
+    res.status(500).send(err.message);
   }
-
-  if (!res.ok) {
-    throw new Error(`Failed to fetch image: ${res.status} ${res.statusText}`);
-  }
-
-  const arrayBuffer = await res.arrayBuffer();
-  return Buffer.from(arrayBuffer);
-}
-
-/**
- * Only replaces www.dropbox.com → dl.dropboxusercontent.com
- * Leaves ALL query parameters untouched.
- */
-function convertDropboxHost(url) {
-  return url.replace("www.dropbox.com", "dl.dropboxusercontent.com");
 }
