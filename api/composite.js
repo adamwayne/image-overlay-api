@@ -1,50 +1,43 @@
 import Jimp from "jimp";
 import fetch from "node-fetch";
+import { v4 as uuidv4 } from "uuid";
 import fs from "fs";
 import path from "path";
-import { v4 as uuidv4 } from "uuid";
 
-/**
- * Bulletproof Dropbox URL sanitizer
- * - Forces dl.dropboxusercontent.com
- * - Removes all params
- * - Enforces ?dl=1
- */
-function sanitizeDropboxUrl(url) {
-  if (!url) return url;
-  url = url.trim();
+async function loadImageSafe(url) {
+  if (!url) throw new Error("Missing image URL");
 
-  url = url
-    .replace("www.dropbox.com", "dl.dropboxusercontent.com")
-    .replace("dropbox.com", "dl.dropboxusercontent.com");
+  const response = await fetch(url, { redirect: "follow" });
 
-  const clean = url.split("?")[0];
-  return clean + "?dl=1";
-}
-
-/**
- * Safe image loader
- * - Downloads the file manually
- * - Detects Dropbox HTML pages
- * - Saves locally then loads via Jimp
- */
-async function loadImage(url, label = "file") {
-  const safeUrl = sanitizeDropboxUrl(url);
-
-  const resp = await fetch(safeUrl);
-
-  const contentType = resp.headers.get("content-type") || "";
-  const buf = await resp.buffer();
-
-  if (contentType.includes("html")) {
-    throw new Error(`❌ Dropbox returned HTML instead of image for ${label}.
-URL: ${safeUrl}`);
+  if (!response.ok) {
+    throw new Error(`Fetch failed: ${response.status} ${response.statusText}`);
   }
 
-  const tmpPath = `/tmp/${label}-${uuidv4()}.png`;
-  fs.writeFileSync(tmpPath, buf);
+  const buffer = Buffer.from(await response.arrayBuffer());
 
-  return await Jimp.read(tmpPath);
+  // Detect PNG
+  const isPng =
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47;
+
+  // Detect JPEG
+  const isJpeg =
+    buffer[0] === 0xff &&
+    buffer[1] === 0xd8 &&
+    buffer[2] === 0xff;
+
+  if (!isPng && !isJpeg) {
+    throw new Error(
+      `❌ Remote file is NOT an image.\n` +
+      `URL: ${url}\n` +
+      `Bytes: ${buffer[0]},${buffer[1]},${buffer[2]},${buffer[3]}\n` +
+      `Content-Type: ${response.headers.get("content-type")}`
+    );
+  }
+
+  return Jimp.read(buffer);
 }
 
 export default async function handler(req, res) {
@@ -54,102 +47,84 @@ export default async function handler(req, res) {
 
   try {
     const {
-      type = "display",
+      type,
       design_url,
       background_url,
       width_percent = 50,
       x_percent = 50,
       y_percent = 50,
+      canvas_width,
+      canvas_height,
       webhook_url,
       metadata
     } = req.body;
 
-    if (!design_url) {
-      return res.status(400).json({ error: "Missing design_url" });
+    if (!design_url || !background_url) {
+      return res.status(400).json({ error: "Missing design_url or background_url" });
     }
 
-    // Sanitize & load design
-    const design = await loadImage(design_url, "design");
+    console.log("🎨 DESIGN:", design_url);
+    console.log("🖼 BACKGROUND:", background_url);
 
-    let background = null;
-    if (type !== "print") {
-      if (!background_url) {
-        return res.status(400).json({ error: "Missing background_url" });
-      }
-      background = await loadImage(background_url, "background");
-    }
-
-    let finalImage = null;
+    let final;
 
     if (type === "print") {
-      // Print mode: 4200 × 4800
-      const canvas = new Jimp(4200, 4800, 0x00000000);
+      const design = await loadImageSafe(design_url);
+      const width = canvas_width || 4200;
+      const height = canvas_height || 4800;
 
-      const dx = design.bitmap.width;
-      const dy = design.bitmap.height;
-      const targetAspect = 4200 / 4800;
-      const designAspect = dx / dy;
+      const canvas = new Jimp(width, height, 0x00000000);
+
+      const designAspect = design.bitmap.width / design.bitmap.height;
+      const canvasAspect = width / height;
 
       let newW, newH;
-      if (designAspect > targetAspect) {
-        newW = 4200;
-        newH = Math.round(newW / designAspect);
+      if (designAspect > canvasAspect) {
+        newW = width;
+        newH = Math.round(width / designAspect);
       } else {
-        newH = 4800;
-        newW = Math.round(newH * designAspect);
+        newH = height;
+        newW = Math.round(height * designAspect);
       }
 
       design.resize(newW, newH);
-
-      const cx = Math.round((4200 - newW) / 2);
-      const cy = Math.round((4800 - newH) / 2);
-
-      canvas.composite(design, cx, cy);
-      finalImage = canvas;
+      canvas.composite(design, (width - newW) / 2, (height - newH) / 2);
+      final = canvas;
     } else {
-      // Display mode
-      const targetWidth = Math.round(
-        (background.bitmap.width * width_percent) / 100
-      );
+      const background = await loadImageSafe(background_url);
+      const design = await loadImageSafe(design_url);
 
+      const targetWidth = Math.round((background.bitmap.width * width_percent) / 100);
       design.resize(targetWidth, Jimp.AUTO);
 
-      const posX = Math.round(
-        background.bitmap.width * (x_percent / 100) - design.bitmap.width / 2
-      );
-      const posY = Math.round(
-        background.bitmap.height * (y_percent / 100) - design.bitmap.height / 2
-      );
+      const x = Math.round((background.bitmap.width * x_percent) / 100 - design.bitmap.width / 2);
+      const y = Math.round((background.bitmap.height * y_percent) / 100 - design.bitmap.height / 2);
 
-      background.composite(design, posX, posY);
-      finalImage = background;
+      background.composite(design, x, y);
+      final = background;
     }
 
-    // Write output file
     const id = uuidv4();
-    const outPath = `/tmp/${id}.png`;
-    await finalImage.writeAsync(outPath);
+    const outputPath = path.join("/tmp", `${id}.png`);
+
+    await final.writeAsync(outputPath);
 
     const finalUrl = `https://${req.headers.host}/api/fetch-image?id=${id}`;
 
-    // Optional webhook callback
     if (webhook_url) {
       await fetch(webhook_url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          image_url: finalUrl,
-          metadata
-        })
+        body: JSON.stringify({ image_url: finalUrl, metadata })
       });
+
+      return res.status(200).json({ success: true, delivered: "webhook", image_url: finalUrl });
     }
 
-    return res.status(200).json({
-      success: true,
-      image_url: finalUrl
-    });
+    return res.status(200).json({ success: true, image_url: finalUrl });
+
   } catch (err) {
-    console.error("❌ composite.js error:", err);
+    console.error("❌ Error:", err);
     return res.status(500).json({ error: err.message });
   }
 }
