@@ -1,5 +1,6 @@
 import Jimp from "jimp";
 import fetch from "node-fetch";
+import { put } from "@vercel/blob";
 
 export default async function handler(req, res) {
   try {
@@ -45,12 +46,17 @@ export default async function handler(req, res) {
 
     background.composite(design, px, py);
 
-    // Get image as buffer and convert to base64
+    // Get image as buffer
     const imageBuffer = await background.getBufferAsync(Jimp.MIME_PNG);
-    const base64Image = imageBuffer.toString('base64');
-    const dataUrl = `data:image/png;base64,${base64Image}`;
 
-    return res.status(200).json({ success: true, image_url: dataUrl });
+    // Upload to Vercel Blob storage
+    const filename = `composite-${Date.now()}.png`;
+    const blob = await put(filename, imageBuffer, {
+      access: 'public',
+      contentType: 'image/png'
+    });
+
+    return res.status(200).json({ success: true, image_url: blob.url });
 
   } catch (err) {
     console.error("COMPOSITE ERROR:", err);
