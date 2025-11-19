@@ -4,17 +4,26 @@ import fs from 'fs';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 
+/**
+ * REQUIRED FIX — without this, req.body is ALWAYS undefined on Vercel
+ */
+export const config = {
+  api: {
+    bodyParser: true,
+  },
+};
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { 
-    type, 
-    design_url, 
-    background_url, 
-    width_percent, 
-    x_percent, 
+  const {
+    type,
+    design_url,
+    background_url,
+    width_percent,
+    x_percent,
     y_percent,
     canvas_width,
     canvas_height,
@@ -25,17 +34,19 @@ export default async function handler(req, res) {
   try {
     let finalImage;
 
+    // -------------------------------
+    // 🖨 PRINT MODE (DTG print files)
+    // -------------------------------
     if (type === 'print') {
-      // Print file logic (existing)
       const design = await Jimp.read(design_url);
       const targetWidth = canvas_width || 4200;
       const targetHeight = canvas_height || 4800;
-      
+
       const canvas = new Jimp(targetWidth, targetHeight, 0x00000000);
-      
+
       const designAspect = design.bitmap.width / design.bitmap.height;
       const canvasAspect = targetWidth / targetHeight;
-      
+
       let scaledWidth, scaledHeight;
       if (designAspect > canvasAspect) {
         scaledWidth = targetWidth;
@@ -44,17 +55,19 @@ export default async function handler(req, res) {
         scaledHeight = targetHeight;
         scaledWidth = Math.round(targetHeight * designAspect);
       }
-      
+
       design.resize(scaledWidth, scaledHeight);
-      
+
       const x = Math.round((targetWidth - scaledWidth) / 2);
       const y = Math.round((targetHeight - scaledHeight) / 2);
-      
+
       canvas.composite(design, x, y);
       finalImage = canvas;
-      
+
     } else {
-      // Display logic (existing)
+      // -------------------------------
+      // 🎨 DISPLAY MODE (mockups)
+      // -------------------------------
       const [background, design] = await Promise.all([
         Jimp.read(background_url),
         Jimp.read(design_url)
@@ -70,16 +83,19 @@ export default async function handler(req, res) {
       finalImage = background;
     }
 
-    // Generate unique ID
+    // ----------------------------
+    // 🗂 Save into /tmp 
+    // ----------------------------
     const imageId = uuidv4();
-    
-    // Store in /tmp (Vercel's temporary storage)
     const tmpPath = path.join('/tmp', `${imageId}.png`);
     await finalImage.writeAsync(tmpPath);
 
-    // Return URL instead of base64
+    // Public URL (served by fetch-image.js)
     const imageUrl = `https://${req.headers.host}/api/fetch-image?id=${imageId}`;
 
+    // ----------------------------
+    // 🔔 Optional Webhook
+    // ----------------------------
     if (webhook_url) {
       await fetch(webhook_url, {
         method: 'POST',
@@ -90,7 +106,7 @@ export default async function handler(req, res) {
         })
       });
 
-      return res.status(200).json({ 
+      return res.status(200).json({
         message: 'Webhook sent',
         image_url: imageUrl
       });
