@@ -1,28 +1,21 @@
-import fs from 'fs';
-import path from 'path';
+import fs from "fs";
+import path from "path";
 
-export default async function handler(req, res) {
+export default function handler(req, res) {
   const { id } = req.query;
 
   if (!id) {
-    return res.status(400).json({ error: 'Missing image ID' });
+    return res.status(400).json({ error: "Missing id" });
   }
 
-  try {
-    const imagePath = path.join('/tmp', `${id}.png`);
-    
-    if (!fs.existsSync(imagePath)) {
-      return res.status(404).json({ error: 'Image not found or expired' });
-    }
+  const filePath = path.join("/tmp", `${id}.png`);
 
-    const imageBuffer = fs.readFileSync(imagePath);
-    
-    res.setHeader('Content-Type', 'image/png');
-    res.setHeader('Cache-Control', 'no-cache');
-    return res.send(imageBuffer);
-
-  } catch (error) {
-    console.error('Error fetching image:', error);
-    return res.status(500).json({ error: error.message });
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: "File not found" });
   }
+
+  const fileBuffer = fs.readFileSync(filePath);
+
+  res.setHeader("Content-Type", "image/png");
+  res.send(fileBuffer);
 }
