@@ -1,8 +1,8 @@
 import Jimp from "jimp";
-import { v4 as uuidv4 } from "uuid";
+import fetch from "node-fetch";
 import fs from "fs";
 import path from "path";
-import { loadImageBuffer } from "./fetch-image.js"; // <-- matches final loader
+import { v4 as uuidv4 } from "uuid";
 
 export default async function handler(req, res) {
   try {
@@ -13,56 +13,52 @@ export default async function handler(req, res) {
     const {
       design_url,
       background_url,
-      width_percent = 35,
+      width_percent = 50,
       x_percent = 50,
-      y_percent = 40
+      y_percent = 50,
     } = req.body;
 
-    if (!design_url) return res.status(400).json({ error: "Missing design_url" });
-    if (!background_url) return res.status(400).json({ error: "Missing background_url" });
+    if (!design_url || !background_url) {
+      return res.status(400).json({ error: "Missing URLs" });
+    }
 
-    console.log("🎨 DESIGN:", design_url);
-    console.log("🖼 BACKGROUND:", background_url);
+    // Fetch images as buffers
+    const designRes = await fetch(design_url);
+    const bgRes = await fetch(background_url);
 
-    // 🔥 Load both images as buffers
-    const [designBuffer, backgroundBuffer] = await Promise.all([
-      loadImageBuffer(design_url),
-      loadImageBuffer(background_url)
-    ]);
+    if (!designRes.ok) return res.status(400).json({ error: "Bad design URL" });
+    if (!bgRes.ok) return res.status(400).json({ error: "Bad background URL" });
 
-    // 🔥 Decode into Jimp images
-    const design = await Jimp.read(designBuffer);
-    const background = await Jimp.read(backgroundBuffer);
+    const designBuf = Buffer.from(await designRes.arrayBuffer());
+    const bgBuf = Buffer.from(await bgRes.arrayBuffer());
 
-    // 🔥 Resize design proportionally
-    const targetWidth = Math.round(background.bitmap.width * (width_percent / 100));
-    design.resize(targetWidth, Jimp.AUTO);
+    const design = await Jimp.read(designBuf);
+    const background = await Jimp.read(bgBuf);
 
-    // 🔥 Position
-    const x = Math.round((background.bitmap.width * (x_percent / 100)) - (design.bitmap.width / 2));
-    const y = Math.round((background.bitmap.height * (y_percent / 100)) - (design.bitmap.height / 2));
+    // Resize design
+    const newWidth = Math.round((background.bitmap.width * width_percent) / 100);
+    design.resize(newWidth, Jimp.AUTO);
 
-    // 🔥 Composite
-    background.composite(design, x, y);
+    const px = Math.round(
+      background.bitmap.width * (x_percent / 100) - design.bitmap.width / 2
+    );
+    const py = Math.round(
+      background.bitmap.height * (y_percent / 100) - design.bitmap.height / 2
+    );
 
-    // 🔥 Save to tmp
+    background.composite(design, px, py);
+
+    // Save to /tmp
     const id = uuidv4();
-    const tmpPath = path.join("/tmp", `${id}.png`);
-    await background.writeAsync(tmpPath);
+    const filePath = `/tmp/${id}.png`;
+    await background.writeAsync(filePath);
 
-    // 🔥 Public URL (points to fetch-image.js)
-    const host = req.headers.host;
-    const finalUrl = `https://${host}/api/fetch-image?id=${id}`;
-
-    console.log("🔥 FINAL URL:", finalUrl);
-
-    return res.status(200).json({
-      success: true,
-      image_url: finalUrl
-    });
+    // Return a URL to fetch-image
+    const finalUrl = `https://${req.headers.host}/api/fetch-image?id=${id}`;
+    return res.status(200).json({ success: true, image_url: finalUrl });
 
   } catch (err) {
-    console.error("❌ Composite Error:", err);
+    console.error("COMPOSITE ERROR:", err);
     return res.status(500).json({ error: err.message });
   }
 }
