@@ -1,6 +1,7 @@
 {
   "name": "image-overlay-api",
   "version": "1.0.0",
+  "type": "module",
   "dependencies": {
     "jimp": "^0.22.10",
     "node-fetch": "^2.7.0",
