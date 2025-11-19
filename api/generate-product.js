@@ -57,27 +57,52 @@ async function generatePlacement(designImage, placement, productId) {
   if (placement.print) {
     console.log(`  📄 Generating print file: ${placement.placement}`);
 
-    const { canvas_width, canvas_height } = placement.print;
-    const max_percent = placement.print.max_design_percent || 90;
+    const { canvas_width, canvas_height, placements } = placement.print;
 
     // Create transparent canvas
     const canvas = new Jimp(canvas_width, canvas_height, 0x00000000);
 
-    // Clone design for print file
-    const design = designImage.clone();
+    // Check if this is a multi-placement canvas (e.g., wrap-around mug)
+    if (placements && Array.isArray(placements) && placements.length > 0) {
+      console.log(`    🔁 Multi-placement: ${placements.length} instances`);
 
-    // Calculate max design dimensions
-    const maxDesignWidth = Math.round(canvas_width * (max_percent / 100));
-    const maxDesignHeight = Math.round(canvas_height * (max_percent / 100));
+      // Place design multiple times on the same canvas
+      for (let i = 0; i < placements.length; i++) {
+        const pos = placements[i];
+        const design = designImage.clone();
 
-    // Resize to fit
-    design.scaleToFit(maxDesignWidth, maxDesignHeight);
+        // Calculate design size based on width_percent
+        const width_percent = pos.width_percent || 35;
+        const targetWidth = Math.round(canvas_width * (width_percent / 100));
+        design.resize(targetWidth, Jimp.AUTO);
 
-    // Center on canvas
-    const x = Math.round((canvas_width - design.bitmap.width) / 2);
-    const y = Math.round((canvas_height - design.bitmap.height) / 2);
+        // Calculate position
+        const x_percent = pos.x_percent || 50;
+        const y_percent = pos.y_percent || 50;
+        const x = Math.round(canvas_width * (x_percent / 100) - design.bitmap.width / 2);
+        const y = Math.round(canvas_height * (y_percent / 100) - design.bitmap.height / 2);
 
-    canvas.composite(design, x, y);
+        canvas.composite(design, x, y);
+        console.log(`      ✓ Placed design ${i + 1} at ${x_percent}%, ${y_percent}%`);
+      }
+    } else {
+      // Single placement (original logic)
+      const max_percent = placement.print.max_design_percent || 90;
+      const design = designImage.clone();
+
+      // Calculate max design dimensions
+      const maxDesignWidth = Math.round(canvas_width * (max_percent / 100));
+      const maxDesignHeight = Math.round(canvas_height * (max_percent / 100));
+
+      // Resize to fit
+      design.scaleToFit(maxDesignWidth, maxDesignHeight);
+
+      // Center on canvas
+      const x = Math.round((canvas_width - design.bitmap.width) / 2);
+      const y = Math.round((canvas_height - design.bitmap.height) / 2);
+
+      canvas.composite(design, x, y);
+    }
 
     // Upload print file
     const printBuffer = await canvas.getBufferAsync(Jimp.MIME_PNG);
@@ -92,8 +117,7 @@ async function generatePlacement(designImage, placement, productId) {
     results.print_specs = {
       canvas_width,
       canvas_height,
-      design_width: design.bitmap.width,
-      design_height: design.bitmap.height
+      placements: placements ? placements.length : 1
     };
   }
 
